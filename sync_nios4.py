@@ -177,6 +177,9 @@ class sync_nios4:
     def tid(self):
         return self.__utility.tid(self)
 
+    def calc_expression(self,expression, values):
+        return self.__utility.calc_expression(self.__utility,expression,values)
+
     def gguid(self):
         return str(uuid.uuid4())
 
@@ -244,11 +247,13 @@ class sync_nios4:
 
     def upload_datablock(self,datablock,dbname,TID,partial):
         #send datablock
-        itype=0
-        if partial == True:
-            itype=1
+        partialstring = ""
+        if partial == False:
+            partialstring = f"0&partial={self.nrow_sync}&partial_from=0"
+        else:
+            partialstring = f"1"
 
-        sendstring = "https://app.pocketsell.com/_sync/?action=sync_all&token=" + self.__token + "&db=" + dbname + "&tid_sync=" + self.__utility.float_to_str(self,TID) + "&dos=Windows&dmodel=python&partial_send=" + str(itype)
+        sendstring = "https://app.pocketsell.com/_sync/?action=sync_all&token=" + self.__token + "&db=" + dbname + "&tid_sync=" + self.__utility.float_to_str(self,TID) + "&dos=Windows&dmodel=python&lang=it&system=nios4&partial_send=" + partialstring
         
         #datablock = urllib.parse.urlencode(datablock).encode()
         #req =  urllib.request.Request(sendstring, data=datablock)

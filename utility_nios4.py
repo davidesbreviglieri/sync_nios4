@@ -16,6 +16,26 @@
 #UTILITY NIOS4
 #================================================================================
 import datetime
+import uuid
+import ast
+import operator as op
+from typing import Any, Dict, Union
+# Operatori consentiti
+_BIN_OPS = {
+    ast.Add: op.add,
+    ast.Sub: op.sub,
+    ast.Mult: op.mul,
+    ast.Div: op.truediv,
+    ast.FloorDiv: op.floordiv,
+    ast.Mod: op.mod,
+    ast.Pow: op.pow,
+}
+_UNARY_OPS = {
+    ast.UAdd: op.pos,
+    ast.USub: op.neg,
+}
+
+Number = Union[int, float]
 #================================================================================
 class error_n4:
     #The class handles any program errors
@@ -56,17 +76,26 @@ class error_n4:
         del self.__errormessage
 #==========================================================
 class utility_n4:
+    #-------------------------------------------------------
     #utility Nios4
     def tid(self):
         #create tid (time id) using timezone 0
-        return datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    
+        val = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')
+        #controllo che non mi finisca con un 60
+        sval = str(int(val))
+        if sval[-2:] == "60":
+            val = val-1
+        return int(val)
+    #-------------------------------------------------------
+    def gguid(self):
+        return str(uuid.uuid4())
+    #-------------------------------------------------------
     def convap(self,value):
         if value == None:
             return ""
         valore =str(value).replace("'", "''")
         return valore
-
+    #-------------------------------------------------------
     def float_to_str(self,f):
         #convert float number to string
         float_string = repr(f)
@@ -84,3 +113,60 @@ class utility_n4:
         float_string = float_string.replace("L","")        
 
         return float_string
+    #-------------------------------------------------------
+    def _eval_node(self,node: ast.AST, env: Dict[str, Number]) -> Number:
+        if isinstance(node, ast.BinOp):
+            left = self._eval_node(self,node.left, env)
+            right = self._eval_node(self,node.right, env)
+            op_type = type(node.op)
+            if op_type not in _BIN_OPS:
+                raise ValueError(f"Operatore non consentito: {op_type.__name__}")
+            return _BIN_OPS[op_type](left, right)
+
+        if isinstance(node, ast.UnaryOp):
+            operand = self._eval_node(self,node.operand, env)
+            op_type = type(node.op)
+            if op_type not in _UNARY_OPS:
+                raise ValueError(f"Operatore unario non consentito: {op_type.__name__}")
+            return _UNARY_OPS[op_type](operand)
+
+        # Numeri letterali: int/float
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)):
+                return node.value
+            raise ValueError("Sono ammessi solo numeri (int/float) come costanti.")
+
+        # Compatibilità Python <3.8 (se mai servisse)
+        if hasattr(ast, "Num") and isinstance(node, getattr(ast, "Num")):  # type: ignore[attr-defined]
+            return node.n  # type: ignore[attr-defined]
+
+        # Variabili: ammesse solo se presenti nel dizionario
+        if isinstance(node, ast.Name):
+            if node.id in env:
+                val = env[node.id]
+                if not isinstance(val, (int, float)):
+                    raise TypeError(f"Il valore di '{node.id}' deve essere numerico.")
+                return val
+            raise NameError(f"Variabile non definita: {node.id}")
+
+        # Qualsiasi altra cosa (chiamate, attributi, ecc.) è vietata
+        raise ValueError(f"Elemento dell'espressione non consentito: {type(node).__name__}")
+    #-------------------------------------------------------
+    def calc_expression(self,expr: str, values: Dict[str, Number]) -> Number:
+        """
+        Valuta in modo sicuro un'espressione matematica contenente variabili, numeri,
+        operatori aritmetici (+,-,*,/,//,%,**), segni unari e parentesi.
+
+        Args:
+            expr: es. "prezzosingolo * quantitatotale"
+            valori: es. {"prezzosingolo": 1, "quantitatotale": 20}
+
+        Returns:
+            int | float: il risultato calcolato
+
+        Raises:
+            NameError, TypeError, ValueError, ZeroDivisionError
+        """
+        # parsing in modalità 'eval' (solo un'espressione)
+        tree = ast.parse(expr, mode="eval")
+        return self._eval_node(self,tree.body, values)

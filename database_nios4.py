@@ -130,7 +130,7 @@ class database_nios4:
             if not self.exists_table("so_tables"):
                 if self.viewmessage == True:
                     print(self.stime() +  "     create so_tables")
-                if self.setsql("CREATE TABLE so_tables (gguid VARCHAR(40) Not NULL Default '' PRIMARY KEY, tid DOUBLE NOT NULL DEFAULT 0,eli INTEGER NOT NULL DEFAULT 0,arc INTEGER NOT NULL DEFAULT 0,ut VARCHAR(255) NOT NULL DEFAULT '' , displayable DOUBLE NOT NULL DEFAULT 0,eliminable DOUBLE NOT NULL DEFAULT 0,editable DOUBLE NOT NULL DEFAULT 0 , tablename TEXT,syncyes DOUBLE NOT NULL DEFAULT 0,syncsel DOUBLE NOT NULL DEFAULT 0,param TEXT NOT NULL,expressions TEXT NOT NULL,tablelabel TEXT NOT NULL,newlabel TEXT NOT NULL, ind INTEGER NOT NULL DEFAULT 0,lgroup TEXT NOT NULL)") == False:
+                if self.setsql("CREATE TABLE so_tables (gguid VARCHAR(40) Not NULL Default '' PRIMARY KEY, tid DOUBLE NOT NULL DEFAULT 0,eli INTEGER NOT NULL DEFAULT 0,arc INTEGER NOT NULL DEFAULT 0,ut VARCHAR(255) NOT NULL DEFAULT '' , displayable DOUBLE NOT NULL DEFAULT 0,eliminable DOUBLE NOT NULL DEFAULT 0,editable DOUBLE NOT NULL DEFAULT 0 , tablename TEXT,syncyes DOUBLE NOT NULL DEFAULT 0,syncsel DOUBLE NOT NULL DEFAULT 0,param MEDIUMTEXT NOT NULL,expressions MEDIUMTEXT NOT NULL,tablelabel TEXT NOT NULL,newlabel TEXT NOT NULL, ind INTEGER NOT NULL DEFAULT 0,lgroup TEXT NOT NULL)") == False:
                     return False
 
             if not self.exists_table("so_fields"):
