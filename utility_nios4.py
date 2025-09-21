@@ -19,7 +19,7 @@ import datetime
 import uuid
 import ast
 import operator as op
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union,List
 # Operatori consentiti
 _BIN_OPS = {
     ast.Add: op.add,
@@ -170,3 +170,24 @@ class utility_n4:
         # parsing in modalità 'eval' (solo un'espressione)
         tree = ast.parse(expr, mode="eval")
         return self._eval_node(self,tree.body, values)
+    #-------------------------------------------------------
+    def extract_expression_value(self,expr: str) -> List[str]:
+        """
+        Estrae i nomi delle variabili da un'espressione matematica.
+
+        Args:
+            expr (str): espressione, es. "prezzosingolo * quantitatotale"
+
+        Returns:
+            List[str]: lista di variabili distinte
+        """
+        tree = ast.parse(expr, mode="eval")
+        variabili = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                variabili.append(node.id)
+
+        # Rimuovo duplicati mantenendo l'ordine
+        return list(dict.fromkeys(variabili))    
+    #-------------------------------------------------------    

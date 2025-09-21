@@ -180,6 +180,9 @@ class sync_nios4:
     def calc_expression(self,expression, values):
         return self.__utility.calc_expression(self.__utility,expression,values)
 
+    def extract_expression_value(self,expression):
+        return self.__utility.extract_expression_value(self.__utility,expression)
+
     def gguid(self):
         return str(uuid.uuid4())
 
