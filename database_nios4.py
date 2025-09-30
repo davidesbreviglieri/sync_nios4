@@ -4,12 +4,13 @@
 #DB NIOS4 (MYSQL VERSION)
 #================================================================================
 #standard class
+from __future__ import annotations
+
 import mysql.connector
 from mysql.connector import Error
-import os
-import sys
+from mysql.connector.connection import MySQLConnection  # precise connection type
+from typing import Any, Dict, List, Optional, Tuple
 import datetime
-import random, string
 import uuid
 #================================================================================
 #nios4 class
@@ -17,9 +18,38 @@ from utility_nios4 import utility_n4
 from utility_nios4 import error_n4
 #================================================================================
 class database_nios4:
+    """
+    Nios4 database helper for MySQL.
 
-    def __init__(self,username,password,dbname,hostdb,usernamedb,passworddb):
-        #controllo se esiste il database oppure no
+    This class initializes (and, if needed, creates) the target database and
+    exposes a collection of convenience methods to introspect schema and run
+    basic SQL operations used by Nios4.
+    """
+    def __init__(self,username:str,password:str,dbname:str,hostdb:str,usernamedb:str,passworddb:str) -> None:
+        """
+        Initialize the helper and ensure the database exists.
+
+        Parameters
+        ----------
+        username : str
+            Application-level username (stored by the class, not used by MySQL).
+        password : str
+            Application-level password (stored by the class, not used by MySQL).
+        dbname : str
+            Target MySQL database name.
+        hostdb : str
+            MySQL host (e.g., "localhost" or an IP/DNS).
+        usernamedb : str
+            MySQL user.
+        passworddb : str
+            MySQL password.
+
+        Notes
+        -----
+        - Connects to the MySQL server (without selecting a DB),
+          creates `dbname` if missing, then calls :meth:`initializedb`.
+        - Any connection errors are printed and stored in `self.err`.
+        """
         self.__host = hostdb
         self.__usernamedb = usernamedb
         self.__passworddb = passworddb
@@ -27,100 +57,145 @@ class database_nios4:
         self.__password = password
         self.__dbname = dbname
         self.viewmessage = True
-        self.connectiondb = None
 
-        #controllo se esiste il database se non esiste lo devo creare
         try:
-            # Connessione al database MySQL
             connection = mysql.connector.connect(
-                host=hostdb,  # Ad esempio, 'localhost' o l'IP del tuo server MySQL
-                user=usernamedb,  # Il tuo username MySQL
-                password=passworddb  # La tua password MySQL
+                host=hostdb,
+                user=usernamedb,
+                password=passworddb
             )
 
             if connection.is_connected():
                 cursor = connection.cursor()
-                # Verifica l'esistenza del database
                 cursor.execute("SHOW DATABASES")
                 databases = [db[0] for db in cursor]
                 if dbname in databases:
                     print(f"Il database '{dbname}' esiste già.")
                 else:
-                    # Crea il database se non esiste
                     cursor.execute(f"CREATE DATABASE {dbname} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                    print(f"Database '{dbname}' creato con successo.")
+                    print(f"Database '{dbname}' created successfully.")
 
                 self.initializedb()
 
         except Error as e:
-            print(f"Errore durante la connessione al MySQL: {e}")
+            print(f"Error connecting to MySQL: {e}")
         finally:
             if (connection.is_connected()):
                 cursor.close()
                 connection.close()
-                print("Connessione al MySQL chiusa.")
 
         self.err = error_n4("","")
+    #--------------------------------------------------------------------------------------
+    def exists_table(self, tablename: str) -> bool:
+        """
+        Check whether a table exists.
 
-    def exists_table(self,tablename):
-        self.connectiondb = self.connectdb()
-        cursor = self.connectiondb.cursor()
+        Parameters
+        ----------
+        tablename : str
+            Table name to check.
+
+        Returns
+        -------
+        bool
+            ``True`` if the table exists, ``False`` otherwise.
+        """        
+        connectiondb = self.connectdb()
+        cursor = connectiondb.cursor()
         query = f"SHOW TABLES LIKE '{tablename}'"
         cursor.execute(query)
         result = cursor.fetchone()
         cursor.close()
+        connectiondb.close()
         return result is not None        
+    #--------------------------------------------------------------------------------------
+    def exists_field(self, tablename: str, fieldname: str) -> bool:
+        """
+        Check whether a field (column) exists in a table.
 
-    def exists_field(self,tablename,fieldname):
-        self.connectiondb = self.connectdb()
-        cursor = self.connectiondb.cursor()
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+        fieldname : str
+            Column name.
+
+        Returns
+        -------
+        bool
+            ``True`` if the column exists, ``False`` otherwise.
+        """        
+        connectiondb = self.connectdb()
+        cursor = connectiondb.cursor()
         query = f"SHOW COLUMNS FROM {tablename} LIKE '{fieldname}'"
         cursor.execute(query)
         result = cursor.fetchone()
         cursor.close()
+        connectiondb.close()
         return result is not None  
+    #--------------------------------------------------------------------------------------
+    def connectdb(self) -> Optional[MySQLConnection]:
+        """
+        Open a connection to the configured MySQL database.
 
-    def connectdb(self):
-        #connection on db
-        #try:
+        Returns
+        -------
+        Optional[mysql.connector.connection.MySQLConnection]
+            A live MySQL connection if successful, otherwise ``None``.
 
-        #if self.connectiondb == None:
-        db_config = {
-            'host': self.__host,    # L'indirizzo del server MySQL, può essere un indirizzo IP o un nome di dominio
-            'user': self.__usernamedb, # Il tuo username MySQL
-            'password': self.__passworddb, # La tua password MySQL
-            'database': self.__dbname # Il nome del database a cui vuoi connetterti
-        }
-        self.connectiondb = mysql.connector.connect(**db_config)
-
-        #if self.connectiondb.is_connected():            
-        #    print("Connesso")
-        #else:    
-        #    db_config = {
-        #        'host': self.__host,    # L'indirizzo del server MySQL, può essere un indirizzo IP o un nome di dominio
-        #        'user': self.__username, # Il tuo username MySQL
-        #        'password': self.__password, # La tua password MySQL
-        #        'database': self.__dbname # Il nome del database a cui vuoi connetterti
-        #    }
-        #    self.connectiondb = mysql.connector.connect(**db_config)
-
-        return self.connectiondb
-        
-        #except Exception as e:
-        #    self.err.errorcode = "E001"
-        #    self.err.errormessage = str(e)
-        #    return None
-
-    def stime(self):
-        #return string of current date
-        return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-    def initializedb(self):
-        #inizialize db
-        #if db non exist the class create file and create all standard tables of Nios4 for correct work
+        Notes
+        -----
+        Stores error details in ``self.err`` on failure.
+        """
         try:
-            #self.connectiondb = self.connectdb()
 
+            db_config = {
+                'host': self.__host,
+                'user': self.__usernamedb,
+                'password': self.__passworddb,
+                'database': self.__dbname
+            }
+            connectiondb = mysql.connector.connect(**db_config)
+
+            return connectiondb
+        
+        except Exception as e:
+            self.err.errorcode = "E001"
+            self.err.errormessage = str(e)
+            return None
+    #--------------------------------------------------------------------------------------
+    def stime(self) -> str:
+        """
+        Get the current timestamp as a formatted string.
+
+        Returns
+        -------
+        str
+            Current timestamp formatted as ``'%Y-%m-%d %H:%M:%S'``.
+        """
+        return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    #--------------------------------------------------------------------------------------
+    def initializedb(self) -> bool:
+        """
+        Ensure core Nios4 tables exist; create them if missing.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` on failure.
+
+        Notes
+        -----
+        Creates the following tables if absent:
+
+        - ``so_tables``
+        - ``so_fields``
+        - ``so_users``
+        - ``lo_setting`` (with an initial row)
+        - ``lo_cleanbox``
+        - ``lo_syncbox``
+        """
+        try:
             if self.viewmessage == True:
                 print("--------------------------------------------------------------------")
                 print(self.stime() +  "     CREATE/CHECK DB")
@@ -171,9 +246,21 @@ class database_nios4:
             return False 
 
         return True
+    #--------------------------------------------------------------------------------------
+    def get_ind(self, tablename: str) -> int:
+        """
+        Compute the next `ind` value for a table.
 
-    def get_ind(self,tablename):
-        #recupero l'indice da utilizzare per un nuovo record
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+
+        Returns
+        -------
+        int
+            The next integer index (``max(ind)+1``), or ``0`` on error.
+        """
         try:
             records=self.getsql(f"SELECT ind FROM {tablename} ORDER BY ind desc limit 1")
             if records:
@@ -184,15 +271,43 @@ class database_nios4:
             self.err.errorcode = "E006"
             self.err.errormessage = str(e)
             return 0   
+    #--------------------------------------------------------------------------------------
+    def convap(self, value: Optional[Any]) -> str:
+        """
+        Convert a Python value to a SQL-safe string for embedding in queries.
 
-    def convap(self,value):
+        Parameters
+        ----------
+        value : Any or None
+            Value to convert.
+
+        Returns
+        -------
+        str
+            Empty string for ``None``; otherwise the string value with single
+            quotes doubled (``'`` → ``''``).
+        """
         if value == None:
             return ""
         valore =str(value).replace("'", "''")
         return valore
+    #--------------------------------------------------------------------------------------
+    def addsyncbox(self, tablename: str, gguidrif: str) -> bool:
+        """
+        Add a row to ``lo_syncbox`` (for outgoing sync).
 
-    def addsyncbox(self,tablename,gguidrif):
-        #aggiungo un record alla syncbox da inviare
+        Parameters
+        ----------
+        tablename : str
+            Table name to mark for sync.
+        gguidrif : str
+            Referenced row GUID.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+        """
         gguid = uuid.uuid4()
         tid = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
 
@@ -200,60 +315,116 @@ class database_nios4:
         stringa2 = f"VALUES ('{gguid}',{tid},'{self.convap(tablename)}','{gguidrif}')"
 
         return self.setsql(stringa + stringa2)
+    #--------------------------------------------------------------------------------------
+    def addcleanbox(self, tablename: str, gguidrif: str) -> bool:
+        """
+        Add a row to ``lo_cleanbox`` (to notify deletions/cleanup) and
+        remove any matching entry from ``lo_syncbox``.
 
-    def addcleanbox(self,tablename,gguidrif):
-        #aggiungo un record alla cleanbox da inviare
+        Parameters
+        ----------
+        tablename : str
+            Table name to mark for cleaning.
+        gguidrif : str
+            Referenced row GUID.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+        """
         gguid = uuid.uuid4()
         tid = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
 
-        stringa = f"INSERT INTO lo_cleanbox (gguid,tid,tablename,gguidrif) "    
-        stringa2 = f"VALUES ('{gguid}',{tid},'{self.convap(tablename)}','{gguidrif}')"
+        sql1 = f"INSERT INTO lo_cleanbox (gguid,tid,tablename,gguidrif) "    
+        sql2 = f"VALUES ('{gguid}',{tid},'{self.convap(tablename)}','{gguidrif}')"
 
-        #cancello il valore se presente nella syncbox
+        # Remove from syncbox if present
         self.setsql(f"DELETE FROM lo_syncbox WHERE tablename='{self.convap(tablename)}' and gguidrif='{gguidrif}'")
 
-        return self.setsql(stringa + stringa2)
+        return self.setsql(sql1 + sql2)
+    #--------------------------------------------------------------------------------------
+    def setsql(self, sql: str) -> bool:
+        """
+        Execute a single SQL statement (no result expected).
 
-    def setsql(self,sql):
-        #Executes an sql command directly on the database passed with the conn parameter#set value
+        Parameters
+        ----------
+        sql : str
+            SQL string to execute.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+
+        Notes
+        -----
+        Commits the transaction if the statement succeeds.
+        """
         try:
-            self.connectiondb = self.connectdb()
-            c = self.connectiondb.cursor()
+            connectiondb = self.connectdb()
+            if connectiondb is None:
+                raise RuntimeError("Cannot open DB connection")            
+            c = connectiondb.cursor()
             c.execute(sql)
-            self.connectiondb.commit()
+            connectiondb.commit()
             c.close()
-            self.connectiondb.close()
+            connectiondb.close()
             return True
         except Exception as e:
             self.err.errorcode = "E004"
             self.err.errormessage = str(e)
             print("ERROR SQL ->" + str(e))
             return False
+    #--------------------------------------------------------------------------------------
+    def getsql(self, sql: str) -> Optional[List[Tuple[Any, ...]]]:
+        """
+        Execute a SQL query and fetch all rows.
 
-    def getsql(self,sql):
-        #Retrieve a datatable with sql string on the standard database
-        #try:
-        self.connectiondb = self.connectdb()
-        c = self.connectiondb.cursor()
-        c.execute(sql)
-        records = c.fetchall()
-        c.close()
-        self.connectiondb.close()
-        return records
-        #except Exception as e:
-        #    self.err.errorcode = "E005"
-        #    self.err.errormessage = str(e)
-        #    return None
+        Parameters
+        ----------
+        sql : str
+            SQL query to execute.
 
-    def get_tablesname(self):
-        #Retrieves all the names of the tables managed by Nios4
+        Returns
+        -------
+        list of tuple or None
+            A list of result rows (each row as a tuple) if successful;
+            ``None`` on failure.
+        """
+        try:
+            connectiondb = self.connectdb()
+            if connectiondb is None:
+                raise RuntimeError("Cannot open DB connection")            
+            c = connectiondb.cursor()
+            c.execute(sql)
+            records: List[Tuple[Any, ...]] = c.fetchall()
+            c.close()
+            connectiondb.close()
+            return records
+        except Exception as e:
+            self.err.errorcode = "E005"
+            self.err.errormessage = str(e)
+            return None
+    #--------------------------------------------------------------------------------------    
+    def get_tablesname(self) -> Optional[Dict[str, float]]:
+        """
+        Retrieve all Nios4-managed table names.
+
+        Returns
+        -------
+        dict or None
+            Mapping ``{tablename: tid}`` ordered by table name
+            (as retrieved), or ``None`` on error.
+        """
         try:
             records=self.getsql("SELECT tablename,tid FROM so_tables ORDER BY tablename")
             if records == None:
                 return None
-            tables = {}
+            tables: Dict[str, float] = {}
             for r in records:
-                tables[r[0]] = r[1]
+                tables[str(r[0])] = r[1]
 
             return tables
         
@@ -261,18 +432,30 @@ class database_nios4:
             self.err.errorcode = "E006"
             self.err.errormessage = str(e)
             return None            
+    #--------------------------------------------------------------------------------------
+    def get_fieldstype(self, tablename: str) -> Optional[Dict[str, str]]:
+        """
+        Retrieve the MySQL data type for each column of a table.
 
-    def get_fieldstype(self,tablename):
-        #Retrieves the type of fields from a specific table
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+
+        Returns
+        -------
+        dict or None
+            Mapping ``{column_name: data_type}`` (as reported by
+            ``INFORMATION_SCHEMA.COLUMNS``), or ``None`` on error.
+        """
         try:
-            #records=self.getsql('PRAGMA TABLE_INFO({})'.format(tablename))
             records=self.getsql(f"SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='{tablename}' and TABLE_SCHEMA ='{self.__dbname}'")
             if records == None:
                 return None
-            tfields = {}
+            tfields: Dict[str, str] = {}
             for r in records:
                 t = r[1]
-                tfields[r[0]] = t
+                tfields[str(r[0])] = t
 
             return tfields
 
@@ -280,9 +463,29 @@ class database_nios4:
             self.err.errorcode = "E007"
             self.err.errormessage = str(e)
             return None            
+    #--------------------------------------------------------------------------------------
+    def newrow(self, tablename: str, gguid: str) -> bool:
+        """
+        Insert a new row with the given GUID, auto-filling defaults.
 
-    def newrow(self,tablename,gguid):
-        #Create a new row within the passed table with a gguid (id) set
+        Parameters
+        ----------
+        tablename : str
+            Target table.
+        gguid : str
+            GUID to assign to the ``gguid`` column.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+
+        Notes
+        -----
+        - Skips ``gguid`` when building the column list (it's inserted explicitly).
+        - Assigns default values based on column data types detected via
+          :meth:`get_fieldstype`.
+        """
         try:
             #list of skipped field
             skipfields = ["gguid"]
@@ -321,75 +524,110 @@ class database_nios4:
             return True
 
         except Exception as e:
-            print(str(e))
             self.err.errorcode = "E008"
             self.err.errormessage = str(e)
             return False            
+    #--------------------------------------------------------------------------------------
+    def get_fieldsname(self) -> Optional[Dict[str, Tuple[int, int]]]:
+        """
+        Retrieve all created fields and tables known to Nios4,
+        enriched with currently present DB columns.
 
-    def get_fieldsname(self):
-        #retrieves all currently created fields and tables
-        #try:
-        records=self.getsql("SELECT tablename,fieldname,tid,fieldtype FROM so_fields ORDER BY tablename")
-        if records == None:
-            return None
-        fields = {}
-        for r in records:
-            key = str(r[0]).lower() + "|" + str(r[1]).lower()
-            if key not in fields:
-                fields[key] = [r[2],r[3]]
-
-        #add fields
-        records=self.getsql("SELECT tablename FROM so_tables ORDER BY tablename")
-        if records == None:
-            return None
-
-        for r in records:
-            tfields = self.get_fieldstype(r[0])
-            for c in tfields:
-                key = str(r[0]).lower() + "|" + str(c).lower()
+        Returns
+        -------
+        dict or None
+            Mapping ``{ 'table|field': (tid, fieldtype) }``. If a field
+            exists in the DB but not in ``so_fields``, a heuristic is used
+            to infer ``fieldtype``. ``None`` on error.
+        """
+        try:
+            records=self.getsql("SELECT tablename,fieldname,tid,fieldtype FROM so_fields ORDER BY tablename")
+            if records == None:
+                return None
+            fields: Dict[str, Tuple[int, int]] = {}
+            for r in records:
+                key = str(r[0]).lower() + "|" + str(r[1]).lower()
                 if key not in fields:
-                    v = key.split("|")
-                    if v[1] == "gguid" or v[1] == "ut" or v[1] == "uta" or v[1] == "exp" or v[1] == "gguidp" or v[1] == "tap" or v[1] == "dsp" or v[1] == "dsc" or v[1] == "utc":
-                        fields[key] = [0,0]
-                    elif v[1] == "tidc" or v[1] == "tid" or v[1] == "eli" or v[1] == "arc" or v[1] == "ind" or v[1] == "dsq1" or v[1] == "dsq2":
-                        fields[key] = [0,10]
-                    else:
-                        if "varchar" in tfields[c]  or tfields[c] == "text" or tfields[c] == "mediumtext":
+                    fields[key] = (int(r[2]), int(r[3]))
+
+            #add fields
+            records=self.getsql("SELECT tablename FROM so_tables ORDER BY tablename")
+            if records == None:
+                return None
+
+            for r in records:
+                tfields = self.get_fieldstype(r[0])
+                for c in tfields:
+                    key = str(r[0]).lower() + "|" + str(c).lower()
+                    if key not in fields:
+                        v = key.split("|")
+                        if v[1] == "gguid" or v[1] == "ut" or v[1] == "uta" or v[1] == "exp" or v[1] == "gguidp" or v[1] == "tap" or v[1] == "dsp" or v[1] == "dsc" or v[1] == "utc":
                             fields[key] = [0,0]
-                        elif tfields[c] == "int" or tfields[c] == "integer" or tfields[c] == "DECIMAL" or tfields[c] == "FLOAT" or tfields[c] == "double":
+                        elif v[1] == "tidc" or v[1] == "tid" or v[1] == "eli" or v[1] == "arc" or v[1] == "ind" or v[1] == "dsq1" or v[1] == "dsq2":
                             fields[key] = [0,10]
                         else:
-                            fields[key] = [0,0]
+                            if "varchar" in tfields[c]  or tfields[c] == "text" or tfields[c] == "mediumtext":
+                                fields[key] = [0,0]
+                            elif tfields[c] == "int" or tfields[c] == "integer" or tfields[c] == "DECIMAL" or tfields[c] == "FLOAT" or tfields[c] == "double":
+                                fields[key] = [0,10]
+                            else:
+                                fields[key] = [0,0]
 
-        return fields
+            return fields
         
-        #except Exception as e:
-        #    self.err.errorcode = "E010"
-        #    self.err.errormessage = str(e)
-        #    return None    
+        except Exception as e:
+            self.err.errorcode = "E010"
+            self.err.errormessage = str(e)
+            return None    
+    #--------------------------------------------------------------------------------------
+    def get_columnsname(self, tablename: str) -> Optional[List[str]]:
+        """
+        Retrieve the column names of a table.
 
+        Parameters
+        ----------
+        tablename : str
+            Table name.
 
-    def get_columnsname(self,tablename):
-        #Retrieves the column names of a table
-        #try:
-        self.connectiondb = self.connectdb()
-        c = self.connectiondb.cursor()
-        c.execute("select * from " + tablename)
-        return [member[0] for member in c.description]
+        Returns
+        -------
+        list of str or None
+            Column names in order, or ``None`` on error.
+        """
+        try:
+            connectiondb = self.connectdb()
+            if connectiondb is None:
+                raise RuntimeError("Cannot open DB connection")            
+            c = connectiondb.cursor()
+            c.execute("select * from " + tablename)
+            connectiondb.close()
+            return [member[0] for member in c.description]
 
-        #except Exception as e:
-        #    self.err.errorcode = "E011"
-        #    self.err.errormessage = str(e)
-        #    return None
+        except Exception as e:
+            self.err.errorcode = "E011"
+            self.err.errormessage = str(e)
+            return None
+    #--------------------------------------------------------------------------------------
+    def get_gguid(self, tablename: str) -> Optional[Dict[str, float]]:
+        """
+        Get all GUIDs (`gguid`) with their `tid` from a table.
 
-    def get_gguid(self,tablename):
-        #Get all gguids from a table
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+
+        Returns
+        -------
+        dict or None
+            Mapping ``{gguid: tid}``, or ``None`` on error.
+        """
         try:
             values = []
             records=self.getsql("SELECT gguid,tid FROM " + tablename)
             if records == None:
                 return None        
-            values = {}
+            values: Dict[str, float] = {}
             for r in records:
                 if r[0] not in values:
                     values[r[0]] = r[1]
@@ -399,34 +637,47 @@ class database_nios4:
             self.err.errorcode = "E012"
             self.err.errormessage = str(e)
             return None
+    #--------------------------------------------------------------------------------------
+    def extract_sotables(self, tablename: str, TID: float) -> Optional[List[Dict[str, Any]]]:
+        """
+        Extract rows changed after a given `tid`, ready for synchronization.
 
+        Parameters
+        ----------
+        tablename : str
+            Source table name.
+        TID : float
+            Lower bound (inclusive) on the `tid` column.
 
+        Returns
+        -------
+        list of dict or None
+            A list where each item is a dict ``{column: value}`` representing
+            a row. ``None`` on error.
+        """
+        try:
+            values: List[Dict[str, Any]] = []
+            records=self.getsql("SELECT * FROM " + tablename + " where tid >= " + str(TID) + " ORDER BY ind")
+            if records == None:
+                return None
 
-    def extract_sotables(self,tablename,TID):
-        #It extracts the data of the tables that have been modified after a certain tid for sending to the synchronizer
-        #try:
-        values = []
-        records=self.getsql("SELECT * FROM " + tablename + " where tid >= " + str(TID) + " ORDER BY ind")
-        if records == None:
+            columns_name = self.get_columnsname(tablename)
+            if columns_name == None:
+                return None
+            
+            for r in records:
+                o = {}
+                count =0
+                for c in columns_name:
+                    o[c] = r[count]
+                    count =count+1
+                    
+                values.append(o)
+
+            return values
+
+        except Exception as e:
+            self.err.errorcode = "E013"
+            self.err.errormessage = str(e)
             return None
-
-        columns_name = self.get_columnsname(tablename)
-        if columns_name == None:
-            return None
-        
-        for r in records:
-            o = {}
-            count =0
-            for c in columns_name:
-                o[c] = r[count]
-                count =count+1
-                
-            values.append(o)
-
-        return values
-
-        #except Exception as e:
-        #    self.err.errorcode = "E013"
-        #    self.err.errormessage = str(e)
-        #    return None
 

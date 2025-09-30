@@ -15,31 +15,65 @@
 #================================================================================
 #SYNC NIOS4
 #================================================================================
-import os
+from __future__ import annotations
+
 import json
+import os
 import sys
 import uuid
-import requests
 import urllib.request
-from datetime import datetime,timezone
+import urllib.parse
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import requests
 from urllib.parse import quote
-import uuid
-#================================================================================
-from utility_nios4 import error_n4
-from utility_nios4 import utility_n4
+
 from database_nios4 import database_nios4
+from utility_nios4 import error_n4, utility_n4
+
+Number = Union[int, float]
 #================================================================================
 
 class sync_nios4:
+    """
+    Synchronization helper between a local Nios4 MySQL database and the remote service.
 
-    def __init__(self,username,password,token,dbname,hostdb,usernamedb,passworddb):
-        #initialize class
+    It wraps structural sync (tables/fields/users), data push/pull via batch
+    packets, and utility helpers (TID/UUID, URL encoding, notifications, email).
+    """
+
+    def __init__(self,username:str,password:str,token:str,dbname:str,hostdb:str,usernamedb:str,passworddb:str) -> None:
+        """
+        Initialize the sync class and lazy-login if no token is provided.
+
+        Parameters
+        ----------
+        username : str
+            Application (master) user email for the remote service.
+        password : str
+            Application password for the remote service.
+        token : str
+            Access token; if empty, :meth:`login` is called.
+        dbname : str
+            Local MySQL database name.
+        hostdb : str
+            MySQL host (IP/DNS).
+        usernamedb : str
+            MySQL username.
+        passworddb : str
+            MySQL password.
+
+        Notes
+        -----
+        - Creates :class:`database_nios4` and shares the same :class:`error_n4`.
+        - Sets default packet size (:attr:`nrow_sync`) to 5000 rows.
+        - Initializes allowlists for table-level enablement.
+        """
         self.__username = username
         self.__password = password
         self.__token = token
         self.__dbname = dbname
-        #standard path of db file
-        #self.__db = database_nios4(os.path.abspath(os.getcwd()) + "/database") #initialize for sqlite
         self.__db = database_nios4(username,password,dbname,hostdb,usernamedb,passworddb)
         self.__utility = utility_n4
         #class for errors
@@ -51,17 +85,39 @@ class sync_nios4:
         #maximum number of lines that can be shipped at a time
         self.nrow_sync = 5000
         
-        self.enabled_create_tables = [] #tabelle che devono essere create
-        self.enabled_getdata_tables = [] #tabelle che devono essere create e ricevere i dati
-        self.enabled_setdata_tables = [] #tabelle che devono essere create e inviare i dati
+        # tables allowlists
+        #If these lists are filled in, the synchronizer will only act on these tables 
+        #and not on all those present in the database.
+        self.enabled_create_tables = [] # tables to create
+        self.enabled_getdata_tables = [] # tables to receive data for
+        self.enabled_setdata_tables = [] # tables to send data for
 
         if token == "":
             self.login()
 
     #----------------------------------------------------------------------------
-    def send_notificationrecord(self,uta,title,description,tablename,gguidrif):
-        #inserisco una notifica per l'apertura di una scheda
-        #{"TAP":"rapportiintervento","GGUIDP":"4720979e-8590-43fe-b1b5-83f81a4c86bb"}
+    def send_notificationrecord(self,uta:str,title:str,description:str,tablename:str,gguidrif:str) -> None:
+        """
+        Insert a notification row and mark it for synchronization.
+
+        Parameters
+        ----------
+        uta : str
+            Target user ID / account (``uta`` field).
+        title : str
+            Notification title.
+        description : str
+            Notification body/description.
+        tablename : str
+            Related table name (stored in the payload).
+        gguidrif : str
+            Related row GUID (stored in the payload).
+
+        Notes
+        -----
+        - Writes into ``so_notifications``.
+        - Adds the GUID to ``lo_syncbox``.
+        """
         di = {}
         di["TAP"] = tablename
         di["GGUIDP"] = gguidrif
@@ -70,14 +126,51 @@ class sync_nios4:
         tid = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
         param = self.convap(json.dumps(di,ensure_ascii=False))
         data = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        stringa = f"INSERT INTO so_notifications (gguid,gguidp,tid,eli,arc,ut,uta,exp,ind,tap,dsp,dsc,dsq1,dsq2,utc,tidc,param,repeat_b,notificationdescription,tdescription,noticedate,remindertype,dateb,notificationsystem,date,read_b,notificationtype,notificationtitle,ttitle) "    
-        stringa2 = f"VALUES ('{gguid}','',{tid},0,0,'nios4.clock','{uta}','',0,'','','',0,0,'nios4.clock',{tid},'{param}',0,'{self.convap(description)}','','{data}',0,'{data}','nios4','{data}',0,3,'{self.convap(title)}','')"
+        sql1 = f"INSERT INTO so_notifications (gguid,gguidp,tid,eli,arc,ut,uta,exp,ind,tap,dsp,dsc,dsq1,dsq2,utc,tidc,param,repeat_b,notificationdescription,tdescription,noticedate,remindertype,dateb,notificationsystem,date,read_b,notificationtype,notificationtitle,ttitle) "    
+        sql2 = f"VALUES ('{gguid}','',{tid},0,0,'nios4.clock','{uta}','',0,'','','',0,0,'nios4.clock',{tid},'{param}',0,'{self.convap(description)}','','{data}',0,'{data}','nios4','{data}',0,3,'{self.convap(title)}','')"
 
-        self.setsql(stringa + stringa2)
+        self.setsql(sql1 + sql2)
         self.addsyncbox("so_notifications",gguid)
     #----------------------------------------------------------------------------
-    def send_emailv2(self,dbname,sendfrom,sendfromname,sendto,subject,replyto,body,bodyhtml,listcc,listbcc,listdocument):
-        #invio delle mail dal servizio v2 di Nios4
+    def send_emailv2(self,dbname:str,sendfrom:str,sendfromname:str,sendto:str,subject:str,replyto:str,body:str,
+                     bodyhtml:str,listcc:List[str],listbcc:List[str],listdocument:List[str]) -> bool:
+        """
+        Send an email via the remote service.
+
+        Parameters
+        ----------
+        dbname : str
+            Database identifier for the remote service.
+        sendfrom : str
+            Sender email address.
+        sendfromname : str
+            Sender display name.
+        sendto : str
+            Recipient email address (comma-separated if multiple).
+        subject : str
+            Email subject.
+        replyto : str
+            Reply-to address.
+        body : str
+            Plain-text body.
+        bodyhtml : str
+            HTML body (optional; ignored if empty).
+        listcc : list of str
+            CC recipients.
+        listbcc : list of str
+            BCC recipients.
+        listdocument : list of str
+            Attachment identifiers (currently not used).
+
+        Returns
+        -------
+        bool
+            ``True`` if accepted by the service, ``False`` otherwise.
+
+        Notes
+        -----
+        Error details are stored in :attr:`err` on failure.
+        """
         try:
             self.err.error = False
             data = {}
@@ -92,7 +185,6 @@ class sync_nios4:
             data['cc'] = listcc
             data['bcc'] = listbcc
 
-            #gestione degli allegati da fare
             url = f"https://app.pocketsell.com/_master/?action=email_send&token={self.__token}&db={dbname}"
 
             response = requests.post(url, json=data)
@@ -110,8 +202,24 @@ class sync_nios4:
             return False
 
     #----------------------------------------------------------------------------
-    def send_templatemail(self,mail,idtemplate,payload):
-        #invio di una mail attraverso le notifiche
+    def send_templatemail(self,mail:str,idtemplate:str,payload:Dict[str, Any]) -> None:
+        """
+        Queue a template-based email through the notification system.
+
+        Parameters
+        ----------
+        mail : str
+            Recipient email address.
+        idtemplate : str or int
+            Template identifier.
+        payload : dict
+            Template variable payload (will be JSON-encoded into ``param``).
+
+        Notes
+        -----
+        - Inserts an item into ``so_notifications`` with type ``2``.
+        - Adds the item to ``lo_syncbox``.
+        """
         dimail = {}
         dimail["MAIL"] = mail
         dimail["IDTEMP"] = idtemplate
@@ -128,9 +236,36 @@ class sync_nios4:
         self.addsyncbox("so_notifications",gguid)
 
     #----------------------------------------------------------------------------
-    def download_file(self,dbname,pathfile,filename,tablename,fieldname,gguid):
-         #procedo a salvare e a inviare un file al database
-        #creo il dizionario {"gguidfile":"43bc669f-37ef-42fd-9fb3-70e4655330f6","nomefile":"C:\\Users\\Ilaria\\Downloads\\Esempio scheda lavoro.pdf","tid":"20241107142353"}
+    def upload_file(self,dbname:str,pathfile:str,filename:str,tablename:str,fieldname:str,gguid:str):
+        """
+        Upload a local file to the remote store and persist its metadata in DB.
+
+        Parameters
+        ----------
+        dbname : str
+            Remote database identifier.
+        pathfile : str
+            Local filesystem path to the file to upload.
+        filename : str
+            Original filename to store alongside the value.
+        tablename : str
+            Target table for metadata update.
+        fieldname : str
+            Target field name (paired with ``file_<fieldname>``).
+        gguid : str
+            Target row GUID.
+
+        Returns
+        -------
+        dict or None
+            The JSON response from the remote upload endpoint, or ``None`` on error.
+
+        Notes
+        -----
+        - After upload, sets ``<fieldname>`` to a JSON payload with file info and
+          ``file_<fieldname>`` to the original filename, bumping ``tid``.
+        - Adds the row to ``lo_syncbox``.
+        """
         gguidrif = str(uuid.uuid4())
         tid = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
         dizionario = {"gguidfile":gguidrif,"nomefile":filename,"tid":tid}
@@ -141,67 +276,225 @@ class sync_nios4:
             "Content-Type": "xxx"
         }
 
-        # Leggo il file in modalità binaria
         with open(pathfile, "rb") as file:
             file_data = file.read()
 
-        # Invio la richiesta POST con il file come corpo della richiesta
         response = requests.post(url, headers=headers, data=file_data)
-
-        # Converto la risposta in un dizionario (assumendo che la risposta sia in formato JSON)
         result = response.json()
 
-        #procedo a salvare il valore
         self.setsql(f"UPDATE {tablename} SET {fieldname}='{self.convap(stringa)}',file_{fieldname}='{self.convap(filename)}',tid={self.tid()} WHERE gguid='{gguid}'")
-
         self.addsyncbox(tablename,gguid)
 
         return result
     #----------------------------------------------------------------------------
+    def getsql(self, sql: str) -> Optional[List[Tuple[Any, ...]]]:
+        """
+        Execute a SQL query on the local DB and return all rows.
 
-    def getsql(self,sql):
+        Parameters
+        ----------
+        sql : str
+            SQL query.
+
+        Returns
+        -------
+        list of tuple or None
+            Query result or ``None`` on error.
+        """
         return self.__db.getsql(sql)
+    #----------------------------------------------------------------------------
+    def addsyncbox(self, tablename: str, gguid: str) -> bool:
+        """
+        Mark a row for synchronization.
 
-    def addsyncbox(self,tablename,gguid):
-        return self.__db.addsyncbox(tablename,gguid)
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+        gguid : str
+            Row GUID.
 
-    def addcleanbox(self,tablename,gguid):
-        return self.__db.addcleanbox(tablename,gguid)
+        Returns
+        -------
+        bool
+            ``True`` if the marker was inserted, ``False`` otherwise.
+        """
+        return self.__db.addsyncbox(tablename, gguid)
+    #----------------------------------------------------------------------------
+    def addcleanbox(self, tablename: str, gguid: str) -> bool:
+        """
+        Mark a row for deletion/cleanup sync.
 
-    def setsql(self,sql):
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+        gguid : str
+            Row GUID.
+
+        Returns
+        -------
+        bool
+            ``True`` if the marker was inserted, ``False`` otherwise.
+        """
+        return self.__db.addcleanbox(tablename, gguid)
+    #----------------------------------------------------------------------------
+    def setsql(self, sql: str) -> bool:
+        """
+        Execute a non-query SQL statement on the local DB.
+
+        Parameters
+        ----------
+        sql : str
+            SQL to execute.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+        """
         return self.__db.setsql(sql)
-    
-    def newrow(self,tablename,gguid):
-        return self.__db.newrow(tablename,gguid)
+    #----------------------------------------------------------------------------
+    def newrow(self, tablename: str, gguid: str) -> bool:
+        """
+        Insert a new row with the supplied GUID into a table.
 
-    def tid(self):
+        Parameters
+        ----------
+        tablename : str
+            Target table.
+        gguid : str
+            GUID to insert.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+        """
+        return self.__db.newrow(tablename, gguid)
+    #----------------------------------------------------------------------------
+    def tid(self) -> int:
+        """
+        Get a UTC TID (``YYYYMMDDHHMMSS``) as integer.
+
+        Returns
+        -------
+        int
+            Current TID.
+        """
         return self.__utility.tid(self)
+    #----------------------------------------------------------------------------
+    def calc_expression(self, expression: str, values: Dict[str, Number]) -> Number:
+        """
+        Safely evaluate a numeric expression with variables.
 
-    def calc_expression(self,expression, values):
-        return self.__utility.calc_expression(self.__utility,expression,values)
+        Parameters
+        ----------
+        expression : str
+            Expression string.
+        values : dict[str, int | float]
+            Variable mapping.
 
-    def extract_expression_value(self,expression):
-        return self.__utility.extract_expression_value(self.__utility,expression)
+        Returns
+        -------
+        int or float
+            Computed result.
+        """
+        return self.__utility.calc_expression(self.__utility, expression, values)
+    #----------------------------------------------------------------------------
+    def extract_expression_value(self, expression: str) -> List[str]:
+        """
+        Extract variable names from an expression.
 
-    def gguid(self):
+        Parameters
+        ----------
+        expression : str
+            Expression string.
+
+        Returns
+        -------
+        list of str
+            Distinct variable names (order preserved).
+        """
+        return self.__utility.extract_expression_value(self.__utility, expression)
+    #----------------------------------------------------------------------------
+    def gguid(self) -> str:
+        """
+        Generate a UUID4 string.
+
+        Returns
+        -------
+        str
+            New GUID.
+        """
         return str(uuid.uuid4())
+    #----------------------------------------------------------------------------
+    def convap(self, value: Optional[Any]) -> str:
+        """
+        Convert a value to a SQL-safe string (single quotes doubled).
 
-    def convap(self,value):
-        if value == None:
+        Parameters
+        ----------
+        value : Any or None
+            Value to convert.
+
+        Returns
+        -------
+        str
+            Escaped string or empty string if ``None``.
+        """
+        if value is None:
             return ""
-        valore =str(value).replace("'", "''")
-        return valore
+        return str(value).replace("'", "''")
+    #----------------------------------------------------------------------------
+    def getind(self, tablename: str) -> int:
+        """
+        Compute the next ``ind`` value for a table.
 
-    def getind(self,tablename):
+        Parameters
+        ----------
+        tablename : str
+            Table name.
+
+        Returns
+        -------
+        int
+            Next index or ``0`` on error.
+        """
         return self.__db.get_ind(tablename)
+    #----------------------------------------------------------------------------
+    def encode_to_url(self, value: str) -> str:
+        """
+        URL-encode a string after lowercasing and replacing spaces with hyphens.
 
-    def encode_to_url(self,value):
+        Parameters
+        ----------
+        value : str
+            Source string.
+
+        Returns
+        -------
+        str
+            URL-encoded, hyphenated lowercase string.
+        """
         string_lower = value.lower()
-        string_with_hyphens = string_lower.replace(' ', '-')
-        return quote(string_with_hyphens, safe='')
+        string_with_hyphens = string_lower.replace(" ", "-")
+        return quote(string_with_hyphens, safe="")
+    #----------------------------------------------------------------------------
+    def login(self) -> Optional[Dict[str, Any]]:
+        """
+        Log in to the remote service, retrieving a token if needed.
 
-    def login(self):
-        #login server
+        Returns
+        -------
+        dict or None
+            Full JSON response on success (including user info), or ``None`` on error.
+
+        Notes
+        -----
+        - If :attr:`__token` is already set, a token-based login is attempted.
+        - On success, updates ``__token``, ``__idaccount``, and ``__mailaccount``.
+        """
         try:
             self.err.error = False
             url = ""    
@@ -211,28 +504,43 @@ class sync_nios4:
                 url = "https://app.pocketsell.com/_master/?action=user_login&email=" + self.__username + "&password=" + self.__password
 
             req = urllib.request.Request(url)
-            valori = json.load(urllib.request.urlopen(req))
-            if valori["error"] == True:
-                self.err.errorcode = valori["error_code"]
-                self.err.errormessage = valori["error_message"]
+            values = json.load(urllib.request.urlopen(req))
+            if values["error"] == True:
+                self.err.errorcode = values["error_code"]
+                self.err.errormessage = values["error_message"]
                 return None
             #set login value
-            datiutente = valori["user"]
-            self.__token = datiutente["token"]
-            self.__idaccount = datiutente["id"]
-            self.__mailaccount = datiutente["email"]
-            return valori
+            user = values["user"]
+            self.__token = user["token"]
+            self.__idaccount = user["id"]
+            self.__mailaccount = user["email"]
+            return values
 
         except Exception as e:
             self.err.errorcode = "E014"
             self.err.errormessage = str(e)
             return None
+    #----------------------------------------------------------------------------
+    def download_datablock(self,dbname:str,TID:Number,countrows:int)-> Optional[Dict[str, Any]]:
+        """
+        Request a partial sync data block from the remote service.
 
-    def download_datablock(self,dbname,TID,countrows):
-        #receive datablock
-        #sendstring = "https://www.nios4.com/_sync/?action=sync_all&token=" + self.__token + "&db=" & + dbname + "&tid_sync=" + str(TID) + "&dos=Linux&dmodel=desktop&partial=" + str(self.nrow_sync) + "&partial_from=" + str(countrows)
+        Parameters
+        ----------
+        dbname : str
+            Remote database identifier.
+        TID : int or float
+            Lower bound for synchronization (``tid_sync``).
+        countrows : int
+            Offset for partial download (``partial_from``).
+
+        Returns
+        -------
+        dict or None
+            The JSON payload with sync data, or ``None`` on error.
+        """
         sendstring = f"https://app.pocketsell.com/_sync/?action=sync_all&token={self.__token}&db={dbname}&tid_sync={str(TID)}&dos=Linux&dmodel=desktop&partial={str(self.nrow_sync)}&partial_from={str(countrows)}"
-        
+       
         datablock = {}
         s = [""]
         datablock["XXX"] = s
@@ -247,9 +555,28 @@ class sync_nios4:
             return None
 
         return resp
+    #----------------------------------------------------------------------------
+    def upload_datablock(self,datablock:Dict[str, Any],dbname:str,TID:Number,partial:bool) -> Optional[Dict[str, Any]]:
+        """
+        Send a sync data block to the remote service.
 
-    def upload_datablock(self,datablock,dbname,TID,partial):
-        #send datablock
+        Parameters
+        ----------
+        datablock : dict
+            Data packet (e.g., structure or ``sync_box`` list).
+        dbname : str
+            Remote database identifier.
+        TID : int or float
+            Sync lower bound for server-side processing.
+        partial : bool
+            Whether this is a normal incremental packet (``True``) or the
+            final/front packet (``False``).
+
+        Returns
+        -------
+        dict or None
+            The JSON response, or ``None`` on error.
+        """
         partialstring = ""
         if partial == False:
             partialstring = f"0&partial={self.nrow_sync}&partial_from=0"
@@ -258,18 +585,14 @@ class sync_nios4:
 
         sendstring = "https://app.pocketsell.com/_sync/?action=sync_all&token=" + self.__token + "&db=" + dbname + "&tid_sync=" + self.__utility.float_to_str(self,TID) + "&dos=Windows&dmodel=python&lang=it&system=nios4&partial_send=" + partialstring
         
-        #datablock = urllib.parse.urlencode(datablock).encode()
-        #req =  urllib.request.Request(sendstring, data=datablock)
-        #resp = json.load(urllib.request.urlopen(req))
-
-        #with open('/home/nios4ai/sync_nios4/received_data.json', 'w') as file:
-        #    json.dump(datablock, file, indent=4) 
-
-
         resp = requests.post(sendstring, json=datablock)
 
-        #print(datablock)
-        response = resp.json()
+        try:
+            response: Dict[str, Any] = resp.json()
+        except Exception:
+            self.err.errorcode = "E014"
+            self.err.errormessage = "Invalid JSON from upload_datablock"
+            return None
 
         if response["result"] == "KO":
             self.err.errorcode = response["code"]
@@ -277,9 +600,27 @@ class sync_nios4:
             return None
 
         return response
+    #----------------------------------------------------------------------------
+    def extract_syncrow(self,tablename:str,record: Union[Tuple[Any, ...], List[Any]],columns: List[str]) -> Dict[str, Any]:
+        """
+        Convert a DB row into a `sync_box`-compatible object.
 
-    def extract_syncrow(self,tablename,record,columns):
-        #extract data row for syncbox
+        Parameters
+        ----------
+        tablename : str
+            Source table name.
+        record : tuple or list
+            Row values as fetched from the DB.
+        columns : list of str
+            Column names in order.
+
+        Returns
+        -------
+        dict
+            Object containing ``command``, ``tablename``, ``client`` and
+            a JSON string ``cvalues`` with the row content. Special field
+            name mappings are applied (``*_b``).
+        """
         refieldforbidden={}
         refieldforbidden["read_b"] = "read"
         refieldforbidden["usercloud_b"] = "usercloud"
@@ -312,9 +653,38 @@ class sync_nios4:
 
         o["cvalues"] = json.dumps(cvalue, ensure_ascii=False)
         return o
+    #----------------------------------------------------------------------------
+    def install_data(self,useNTID:bool,datablock:Dict[str, Any],managefile:bool,skipusers:bool,reworkdata:bool):
+        """
+        Apply a received sync data block to the local database.
 
-    def install_data(self,useNTID,datablock,managefile,skipusers,reworkdata):
-        #install datablock in database
+        Parameters
+        ----------
+        useNTID : bool
+            If ``True``, bump local TIDs instead of using remote ones.
+        datablock : dict
+            Full sync payload (may include ``data``, ``tables``, ``fields``,
+            ``users``, ``clean_tables``, ``clean_fields``, ``sync_box``).
+        managefile : bool
+            Whether file processing is needed (currently unused in this method).
+        skipusers : bool
+            If ``True``, skip applying user records (currently unused here).
+        reworkdata : bool
+            If ``True``, perform data rework steps (currently unused here).
+
+        Returns
+        -------
+        bool
+            ``True`` if the data was applied successfully, ``False`` otherwise.
+
+        Notes
+        -----
+        This method:
+        - Drops tables/fields present in cleanup lists.
+        - Creates/updates tables and fields from structure.
+        - Upserts users into ``so_users`` and ``so_localusers``.
+        - Applies row-level changes from ``sync_box``.
+        """
         actualtables = self.__db.get_tablesname()
         actualfields = self.__db.get_fieldsname()
         actualusers = self.__db.get_gguid("so_users")
@@ -325,14 +695,6 @@ class sync_nios4:
         if "data" in datablock:
             datahead = datablock["data"]
             print(self.stime() +  "     SEED->" + datahead["SEED"])
-        #--------------------------------------------
-        #TODO delete file to server
-        #--------------------------------------------
-
-        #--------------------------------------------
-        #TODO Initial conditions
-        #--------------------------------------------
-
         #--------------------------------------------
         #Delete tables
         #--------------------------------------------
@@ -359,7 +721,7 @@ class sync_nios4:
         reloadfields = False
         if "clean_fields" in datablock:
             for key in datablock["clean_fields"].keys():
-                if key in actualtables: #key nome della tabella
+                if key in actualtables:
                     reloadfields = True
                     if self.viewmessage == True:
                         print(self.stime() +  "     delete field " + str(datablock["clean_fields"][key]) + " from table " + key)
@@ -378,7 +740,7 @@ class sync_nios4:
         reloadtables = False
         reloadfields = False
         #--------------------------------------------
-        #tables
+        # Tables creation/update (respect allowlists)
         #--------------------------------------------
         enabledtables = []
         if len(self.enabled_create_tables) > 0 or len(self.enabled_getdata_tables) > 0 or len(self.enabled_setdata_tables) > 0:
@@ -412,11 +774,8 @@ class sync_nios4:
                             reloadtables = True
                             if self.viewmessage == True:
                                 print(self.stime() +  "     add table " + table["tablename"])
-                            #if self.__db.setsql("CREATE TABLE " + key + " (gguid VARCHAR(40) Not NULL DEFAULT '', tid DOUBLE NOT NULL DEFAULT 0,eli INTEGER NOT NULL DEFAULT 0,arc INTEGER NOT NULL DEFAULT 0,ut VARCHAR(255) NOT NULL DEFAULT '',uta VARCHAR(255) NOT NULL DEFAULT '',exp TEXT NOT NULL DEFAULT '',gguidp VARCHAR(40) NOT NULL DEFAULT '', ind INTEGER NOT NULL DEFAULT 0,tap TEXT NOT NULL DEFAULT '',dsp TEXT NOT NULL DEFAULT '',dsc TEXT NOT NULL DEFAULT '', dsq1 DOUBLE NOT NULL DEFAULT 0, dsq2 DOUBLE NOT NULL DEFAULT 0,utc VARCHAR(255) NOT NULL DEFAULT '', tidc DOUBLE NOT NULL DEFAULT 0,xxx_yyy TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)") == False:
                             if self.__db.setsql("CREATE TABLE " + key + " (gguid VARCHAR(40) Not NULL DEFAULT '', tid DOUBLE NOT NULL DEFAULT 0,eli INTEGER NOT NULL DEFAULT 0,arc INTEGER NOT NULL DEFAULT 0,ut VARCHAR(255) NOT NULL DEFAULT '',uta VARCHAR(255) NOT NULL DEFAULT '',exp TEXT NOT NULL DEFAULT '',gguidp VARCHAR(40) NOT NULL DEFAULT '', ind INTEGER NOT NULL DEFAULT 0,tap TEXT NOT NULL DEFAULT '',dsp TEXT NOT NULL DEFAULT '',dsc TEXT NOT NULL DEFAULT '', dsq1 DOUBLE NOT NULL DEFAULT 0, dsq2 DOUBLE NOT NULL DEFAULT 0,utc VARCHAR(255) NOT NULL DEFAULT '', tidc DOUBLE NOT NULL DEFAULT 0)") == False:
                                 return False
-                            #if self.__db.setsql("CREATE INDEX newindex_" + key + " ON " + key + " (gguid,gguidp)") == False:
-                            #    return False
                             if self.__db.setsql("INSERT INTO so_tables (GGUID,tablename,param,expressions,tablelabel,newlabel,lgroup) VALUES ('{0}','{1}','','','','','')".format(str(table["gguid"]),key)) == False:
                                 return False
                             actualtables[key] = 0
@@ -460,9 +819,8 @@ class sync_nios4:
                             if self.__db.setsql(sqlstring) == False:
                                 return False
 
-                        #break #--------
         #--------------------------------------------
-        #fields
+        # Fields creation/update
         #--------------------------------------------
         #fields to skip
         fieldforbidden={}
@@ -613,7 +971,7 @@ class sync_nios4:
             actualtables = self.__db.get_tablesname()
             actualfields = self.__db.get_fieldsname()  
         #--------------------------------------------
-        #users
+        # Users
         #--------------------------------------------
         if "users" in datablock:
             if type(datablock["users"]) is list:
@@ -724,7 +1082,7 @@ class sync_nios4:
                                 return False
 
         #--------------------------------------------
-        #syncbox
+        # Syncbox rows
         #--------------------------------------------
         if "sync_box" in datablock:
             if type(datablock["sync_box"]) is list:
@@ -771,9 +1129,6 @@ class sync_nios4:
                                             if nc in fieldforbidden:
                                                 nc = fieldforbidden[nc]
 
-                                            #print(actualfields)
-                                            #sys.exit("")
-
                                             if k in actualfields and key != "gguid":
                                                 tca = actualfields[k][1]
                                                 if tca != 11:
@@ -797,7 +1152,6 @@ class sync_nios4:
                                                             if type(value) == str and value != None:
                                                                 value=float(value)                                                            
                                                             if value != 0:
-                                                                #print("nc = " + str(round(value)) + " gguid = " + row["gguid"] + " tabella =" + row["tablename"].lower())
                                                                 try:
                                                                     data_formato_mysql = datetime.strptime(str(round(value)), '%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
                                                                     sqlstring = sqlstring + nc + "='" + data_formato_mysql + "',"
@@ -805,9 +1159,6 @@ class sync_nios4:
                                                                     print("errore formato data")
                                     
                                     sqlstring =  sqlstring[:-1] + " WHERE gguid='" + row["gguid"] + "'"
-
-                                    #if row["gguid"] == "1192f785-35eb-4a87-98fb-927d033661a4":
-                                    #print(sqlstring)
 
                                     if self.__db.setsql(sqlstring) == False:
                                         return False
@@ -819,12 +1170,44 @@ class sync_nios4:
                                 return False
 
         return True
+    #----------------------------------------------------------------------------------------------
+    def stime(self) -> str:
+        """
+        Current local time as a formatted string.
 
-    def stime(self):
+        Returns
+        -------
+        str
+            ``'%Y-%m-%d %H:%M:%S'``.
+        """        
         return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    #----------------------------------------------------------------------------------------------
+    def syncro(self, dbname: str, start_tid: Optional[int] = None) -> bool:
+        """
+        Perform a full synchronization round.
 
-    def syncro(self,dbname,start_tid=None):
+        Parameters
+        ----------
+        dbname : str
+            Remote database identifier.
+        start_tid : int, optional
+            If provided, use this TID as the starting point (overrides stored TID).
 
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` otherwise.
+
+        Steps
+        -----
+        1. Determine base TID (from ``lo_setting`` or ``start_tid``).
+        2. Send structure (tables, fields, users).
+        3. Send cleanbox (deletions).
+        4. Send data updates in packets (including explicit syncbox rows).
+        5. Send first small packet to trigger server-side processing.
+        6. Receive and apply partials if requested.
+        7. Clear local sync queues and persist the new ``tidsync``.
+        """
         if self.__token == "":
             self.err.errorcode = "E019"
             self.err.errormessage = "Please login first to synchronize"
@@ -891,7 +1274,6 @@ class sync_nios4:
             return False
 
         finaldata.clear()
-        #partialdata = list()
         partialdata = []
         TID_index =0
         #-----------------------------------------------------------------------------
@@ -938,24 +1320,20 @@ class sync_nios4:
 
         tableswdata=[]
         for t in tables:
-            #controllo che sia abilitata
+
             vtable = True
             if len(self.enabled_setdata_tables) > 0:
                 if t not in self.enabled_setdata_tables:
                     vtable = False
 
-            #records = self.__db.getsql("SELECT COUNT(tid) as conta FROM " + t + " GROUP BY tid HAVING tid >=" + self.__utility.float_to_str(self,TID))
             if vtable == True:
                 records = self.__db.getsql("SELECT COUNT(gguid) as conta FROM " + t + " WHERE tid >=" + self.__utility.float_to_str(self,TID))
                 if records == None:
                     return False
-                #if len(records) > 0:
-                #    print(t + " " + str(len(records)))
                 for r in records:
                     if r[0] > 0 and not t in tableswdata:
                         tableswdata.append(t)
 
-        #aggiungo le tabelle richiamata dalla syncbox
         for rsyncbox in table_syncbox:
             if rsyncbox[0] not in tableswdata and rsyncbox[0] !="":
                 tableswdata.append(rsyncbox[0])
@@ -966,8 +1344,6 @@ class sync_nios4:
         finaldata.clear()
 
         for tablename in tableswdata:
-            
-            #record derivati dall'aggiornamento del valore di tid
             records = self.__db.getsql("SELECT * FROM " + tablename + " where tid >=" + self.__utility.float_to_str(self,TID) + "  ORDER BY ind")
             if records == None:
                 return False
@@ -978,12 +1354,10 @@ class sync_nios4:
             
             for r in records:
                 votorecord = True
-                #controllo che il record non sia richiamato dalla syncbox
                 for rsyncbox in table_syncbox:
                     if rsyncbox[0] == tablename and rsyncbox[1] == r[0]:
                         votorecord = False
                         break
-                #create a dictionary of datas
                 if votorecord == True:
                     o = self.extract_syncrow(tablename,r,columns)
                     if o == None:
@@ -1005,12 +1379,10 @@ class sync_nios4:
                         partialdata = list()
                         finaldata.clear()
 
-            #record derivati dalla syncbox
             for rsyncbox in table_syncbox:
                 if rsyncbox[0] == tablename:
                     records = self.__db.getsql(f"SELECT * FROM {tablename} where gguid='{rsyncbox[1]}'")
                     for r in records:
-                        #create a dictionary of datas
                         o = self.extract_syncrow(tablename,r,columns)
                         if o == None:
                             return False
@@ -1051,7 +1423,6 @@ class sync_nios4:
         #Send first row
         #-----------------------------------------------------------------------------
         print(self.stime() +  "     START SYNCBOX")
-        #print(firstrows)
         finaldata.clear()
         finaldata["sync_box"] = firstrows
         values = self.upload_datablock(finaldata,dbname,TID,False)
